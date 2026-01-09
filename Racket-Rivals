@@ -1,0 +1,812 @@
+--[[
+    RACKET RIVAL AUTO-HIT SCRIPT
+    Universal Version - Works on PC & Mobile
+    Features:
+    - Auto Hit with perfect timing
+    - Rayfield GUI on PC
+    - Mobile touch UI
+    - Force control
+    - Smart object detection
+]]
+
+-- ============================================
+-- INITIALIZATION
+-- ============================================
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Workspace = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
+
+-- Platform detection
+local IS_MOBILE = UserInputService.TouchEnabled
+local IS_PC = UserInputService.MouseEnabled
+
+-- Game state
+local Shuttlecock = nil
+local Racket = nil
+local AutoHitEnabled = false
+local HitForce = 100
+local Connection = nil
+
+print("⚡ DarkForge-X Racket Rival Script Loaded")
+print("📱 Platform: " .. (IS_MOBILE and "Mobile" or "PC"))
+
+-- ============================================
+-- OBJECT DETECTION FUNCTIONS
+-- ============================================
+
+function FindShuttlecock()
+    -- Method 1: Search by name
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            local name = obj.Name:lower()
+            if name:find("shuttle") or name:find("bird") or name:find("cock") then
+                return obj
+            end
+        end
+    end
+    
+    -- Method 2: Search by properties (fast moving small object)
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            if obj.Size.Magnitude < 3 and obj.Transparency < 0.5 then
+                if obj.Velocity.Magnitude > 10 then
+                    return obj
+                end
+            end
+        end
+    end
+    
+    return nil
+end
+
+function FindRacket()
+    local character = LocalPlayer.Character
+    if not character then return nil end
+    
+    -- Check for tools
+    for _, tool in pairs(character:GetChildren()) do
+        if tool:IsA("Tool") then
+            return tool.Handle or tool
+        end
+    end
+    
+    -- Check right hand
+    local rightArm = character:FindFirstChild("RightHand") or 
+                     character:FindFirstChild("Right Arm")
+    return rightArm
+end
+
+-- ============================================
+-- HIT MECHANICS
+-- ============================================
+
+function CalculatePerfectHit()
+    if not Shuttlecock then return Vector3.new(0, 50, 0) end
+    
+    local character = LocalPlayer.Character
+    if not character then return Vector3.new(0, 50, 0) end
+    
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if not root then return Vector3.new(0, 50, 0) end
+    
+    -- Determine opponent side
+    local opponentZ = root.Position.Z > 0 and -40 or 40
+    
+    -- Calculate direction to opponent court
+    local target = Vector3.new(root.Position.X, 10, opponentZ)
+    local direction = (target - Shuttlecock.Position).Unit
+    
+    -- Apply force with arc
+    local force = direction * (80 + HitForce)
+    force = Vector3.new(force.X, 45 + (HitForce * 0.2), force.Z)
+    
+    return force
+end
+
+function ExecuteHit()
+    if not Shuttlecock then
+        Shuttlecock = FindShuttlecock()
+        if not Shuttlecock then return end
+    end
+    
+    local force = CalculatePerfectHit()
+    
+    -- Apply velocity directly
+    if Shuttlecock:IsA("BasePart") then
+        Shuttlecock.Velocity = force
+        
+        -- Add spin
+        Shuttlecock.RotVelocity = Vector3.new(
+            math.random(-20, 20),
+            math.random(-20, 20),
+            math.random(-20, 20)
+        )
+    end
+    
+    -- Try to fire remote events (if game uses them)
+    FireRemotes(force)
+    
+    return true
+end
+
+function FireRemotes(force)
+    -- Search for hit-related remote events
+    for _, obj in pairs(game:GetDescendants()) do
+        if obj:IsA("RemoteEvent") then
+            local name = obj.Name:lower()
+            if name:find("hit") or name:find("strike") or name:find("swing") then
+                pcall(function()
+                    obj:FireServer(Shuttlecock, force)
+                end)
+            end
+        end
+    end
+end
+
+-- ============================================
+-- AUTO-HIT LOOP
+-- ============================================
+
+function StartAutoHit()
+    if Connection then Connection:Disconnect() end
+    
+    Connection = RunService.Heartbeat:Connect(function()
+        if not AutoHitEnabled then return end
+        
+        -- Refresh object references
+        if not Shuttlecock then
+            Shuttlecock = FindShuttlecock()
+        end
+        
+        if not Racket then
+            Racket = FindRacket()
+        end
+        
+        -- Execute hit when shuttlecock is near
+        if Shuttlecock then
+            local character = LocalPlayer.Character
+            if character then
+                local root = character:FindFirstChild("HumanoidRootPart")
+                if root then
+                    local distance = (Shuttlecock.Position - root.Position).Magnitude
+                    
+                    if distance < 20 then -- Hit range
+                        ExecuteHit()
+                        
+                        -- Cooldown to prevent spam
+                        task.wait(0.3)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+function StopAutoHit()
+    AutoHitEnabled = false
+    if Connection then
+        Connection:Disconnect()
+        Connection = nil
+    end
+end
+
+-- ============================================
+-- PC GUI (RAYFIELD)
+-- ============================================
+
+if IS_PC then
+    -- Load Rayfield
+    local success, Rayfield = pcall(function()
+        return loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+    end)
+    
+    if success and Rayfield then
+        local Window = Rayfield:CreateWindow({
+            Name = "Racket Rival Hack",
+            LoadingTitle = "Loading...",
+            LoadingSubtitle = "DarkForge-X",
+            ConfigurationSaving = {Enabled = false},
+            Discord = {Enabled = false},
+            KeySystem = false,
+        })
+        
+        -- Main Tab
+        local MainTab = Window:CreateTab("Main", 4483362458)
+        
+        -- Auto Hit Toggle
+        MainTab:CreateToggle({
+            Name = "Auto Hit",
+            CurrentValue = false,
+            Flag = "AutoHit",
+            Callback = function(Value)
+                AutoHitEnabled = Value
+                if Value then
+                    StartAutoHit()
+                else
+                    StopAutoHit()
+                end
+            end,
+        })
+        
+        -- Hit Force Slider
+        MainTab:CreateSlider({
+            Name = "Hit Force",
+            Range = {50, 200},
+            Increment = 10,
+            Suffix = "%",
+            CurrentValue = 100,
+            Flag = "HitForce",
+            Callback = function(Value)
+                HitForce = Value
+            end,
+        })
+        
+        -- Manual Hit Button
+        MainTab:CreateButton({
+            Name = "Manual Hit",
+            Callback = function()
+                ExecuteHit()
+            end,
+        })
+        
+        -- Status Label
+        MainTab:CreateLabel("Status: Ready")
+        
+        -- Info Tab
+        local InfoTab = Window:CreateTab("Info", 4483362458)
+        InfoTab:CreateParagraph({
+            Title = "How to use",
+            Content = "1. Enable Auto Hit\n2. Adjust force if needed\n3. Stand near shuttlecock\n4. It will auto-hit when in range\n\nHotkeys:\nF = Toggle Auto Hit\nG = Manual Hit"
+        })
+        
+        -- Hotkeys
+        UserInputService.InputBegan:Connect(function(Input)
+            if Input.KeyCode == Enum.KeyCode.F then
+                AutoHitEnabled = not AutoHitEnabled
+                if AutoHitEnabled then
+                    StartAutoHit()
+                else
+                    StopAutoHit()
+                end
+            elseif Input.KeyCode == Enum.KeyCode.G then
+                ExecuteHit()
+            end
+        end)
+        
+        print("✅ Rayfield GUI Loaded")
+    else
+        -- Fallback to simple GUI if Rayfield fails
+        CreateSimpleGUI()
+    end
+end
+
+-- ============================================
+-- MOBILE GUI
+-- ============================================
+
+if IS_MOBILE then
+    -- Create mobile-friendly GUI
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "RacketHackMobile"
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    
+    -- Main Frame
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Name = "MainFrame"
+    MainFrame.Size = UDim2.new(0.7, 0, 0.5, 0)
+    MainFrame.Position = UDim2.new(0.15, 0, 0.25, 0)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    MainFrame.BackgroundTransparency = 0.2
+    MainFrame.BorderSizePixel = 0
+    
+    local UICorner = Instance.new("UICorner")
+    UICorner.CornerRadius = UDim.new(0, 12)
+    UICorner.Parent = MainFrame
+    
+    local UIStroke = Instance.new("UIStroke")
+    UIStroke.Color = Color3.fromRGB(100, 100, 255)
+    UIStroke.Thickness = 2
+    UIStroke.Parent = MainFrame
+    
+    -- Title
+    local Title = Instance.new("TextLabel")
+    Title.Text = "🎾 Racket Hack 🎾"
+    Title.Size = UDim2.new(1, 0, 0.15, 0)
+    Title.Position = UDim2.new(0, 0, 0, 0)
+    Title.BackgroundTransparency = 1
+    Title.TextColor3 = Color3.white
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 20
+    Title.Parent = MainFrame
+    
+    -- Auto Hit Button
+    local AutoHitButton = Instance.new("TextButton")
+    AutoHitButton.Name = "AutoHitButton"
+    AutoHitButton.Text = "AUTO HIT: OFF"
+    AutoHitButton.Size = UDim2.new(0.8, 0, 0.2, 0)
+    AutoHitButton.Position = UDim2.new(0.1, 0, 0.2, 0)
+    AutoHitButton.BackgroundColor3 = Color3.fromRGB(80, 40, 40)
+    AutoHitButton.TextColor3 = Color3.fromRGB(255, 150, 150)
+    AutoHitButton.Font = Enum.Font.GothamBold
+    AutoHitButton.TextSize = 18
+    AutoHitButton.Parent = MainFrame
+    
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 8)
+    btnCorner.Parent = AutoHitButton
+    
+    -- Force Display
+    local ForceLabel = Instance.new("TextLabel")
+    ForceLabel.Text = "FORCE: 100%"
+    ForceLabel.Size = UDim2.new(0.8, 0, 0.15, 0)
+    ForceLabel.Position = UDim2.new(0.1, 0, 0.45, 0)
+    ForceLabel.BackgroundTransparency = 1
+    ForceLabel.TextColor3 = Color3.fromRGB(150, 200, 255)
+    ForceLabel.Font = Enum.Font.GothamMedium
+    ForceLabel.TextSize = 16
+    ForceLabel.Parent = MainFrame
+    
+    -- Manual Hit Button
+    local ManualButton = Instance.new("TextButton")
+    ManualButton.Text = "🔥 MANUAL HIT"
+    ManualButton.Size = UDim2.new(0.8, 0, 0.2, 0)
+    ManualButton.Position = UDim2.new(0.1, 0, 0.65, 0)
+    ManualButton.BackgroundColor3 = Color3.fromRGB(40, 80, 40)
+    ManualButton.TextColor3 = Color3.fromRGB(150, 255, 150)
+    ManualButton.Font = Enum.Font.GothamBold
+    ManualButton.TextSize = 18
+    ManualButton.Parent = MainFrame
+    
+    local manCorner = Instance.new("UICorner")
+    manCorner.CornerRadius = UDim.new(0, 8)
+    manCorner.Parent = ManualButton
+    
+    -- Status
+    local StatusLabel = Instance.new("TextLabel")
+    StatusLabel.Text = "Ready"
+    StatusLabel.Size = UDim2.new(1, 0, 0.1, 0)
+    StatusLabel.Position = UDim2.new(0, 0, 0.9, 0)
+    StatusLabel.BackgroundTransparency = 1
+    StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+    StatusLabel.Font = Enum.Font.GothamMedium
+    StatusLabel.TextSize = 14
+    StatusLabel.Parent = MainFrame
+    
+    -- Close Button
+    local CloseButton = Instance.new("TextButton")
+    CloseButton.Text = "✕"
+    CloseButton.Size = UDim2.new(0.1, 0, 0.15, 0)
+    CloseButton.Position = UDim2.new(0.9, 0, 0, 0)
+    CloseButton.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+    CloseButton.TextColor3 = Color3.white
+    CloseButton.Font = Enum.Font.GothamBold
+    CloseButton.TextSize = 16
+    CloseButton.Parent = MainFrame
+    
+    local closeCorner = Instance.new("UICorner")
+    closeCorner.CornerRadius = UDim.new(0, 8)
+    closeCorner.Parent = CloseButton
+    
+    -- Drag functionality
+    local dragging = false
+    local dragStart = Vector2.new(0, 0)
+    local frameStart = Vector2.new(0, 0)
+    
+    Title.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            frameStart = Vector2.new(MainFrame.Position.X.Offset, MainFrame.Position.Y.Offset)
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.Touch then
+            local delta = input.Position - dragStart
+            MainFrame.Position = UDim2.new(
+                0, frameStart.X + delta.X,
+                0, frameStart.Y + delta.Y
+            )
+        end
+    end)
+    
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    
+    -- Button functionality
+    AutoHitButton.MouseButton1Click:Connect(function()
+        AutoHitEnabled = not AutoHitEnabled
+        
+        if AutoHitEnabled then
+            AutoHitButton.Text = "AUTO HIT: ON"
+            AutoHitButton.BackgroundColor3 = Color3.fromRGB(40, 80, 40)
+            AutoHitButton.TextColor3 = Color3.fromRGB(150, 255, 150)
+            StartAutoHit()
+            StatusLabel.Text = "Auto-Hit Active"
+        else
+            AutoHitButton.Text = "AUTO HIT: OFF"
+            AutoHitButton.BackgroundColor3 = Color3.fromRGB(80, 40, 40)
+            AutoHitButton.TextColor3 = Color3.fromRGB(255, 150, 150)
+            StopAutoHit()
+            StatusLabel.Text = "Auto-Hit Off"
+        end
+    end)
+    
+    ManualButton.MouseButton1Click:Connect(function()
+        ExecuteHit()
+        StatusLabel.Text = "Manual Hit Executed"
+        
+        -- Flash effect
+        ManualButton.BackgroundColor3 = Color3.fromRGB(100, 150, 100)
+        task.wait(0.1)
+        ManualButton.BackgroundColor3 = Color3.fromRGB(40, 80, 40)
+    end)
+    
+    CloseButton.MouseButton1Click:Connect(function()
+        ScreenGui:Destroy()
+        StopAutoHit()
+    end)
+    
+    -- Force adjustment with swipe
+    local forceStart = nil
+    MainFrame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            forceStart = input.Position.X
+        end
+    end)
+    
+    MainFrame.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch and forceStart then
+            local forceEnd = input.Position.X
+            local delta = forceEnd - forceStart
+            
+            if math.abs(delta) > 30 then
+                if delta > 0 then
+                    -- Swipe right - increase force
+                    HitForce = math.min(200, HitForce + 10)
+                else
+                    -- Swipe left - decrease force
+                    HitForce = math.max(50, HitForce - 10)
+                end
+                
+                ForceLabel.Text = "FORCE: " .. HitForce .. "%"
+                StatusLabel.Text = "Force set to " .. HitForce .. "%"
+            end
+            
+            forceStart = nil
+        end
+    end)
+    
+    -- Parent UI
+    ScreenGui.Parent = game.CoreGui or LocalPlayer:WaitForChild("PlayerGui")
+    MainFrame.Parent = ScreenGui
+    
+    print("✅ Mobile GUI Loaded")
+end
+
+-- ============================================
+-- SIMPLE GUI FALLBACK (IF NO RAYFIELD)
+-- ============================================
+
+function CreateSimpleGUI()
+    if IS_MOBILE then return end -- Mobile already has GUI
+    
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "SimpleRacketHack"
+    ScreenGui.ResetOnSpawn = false
+    
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 200, 0, 150)
+    MainFrame.Position = UDim2.new(0, 10, 0, 10)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+    MainFrame.BorderSizePixel = 0
+    
+    local UICorner = Instance.new("UICorner")
+    UICorner.CornerRadius = UDim.new(0, 8)
+    UICorner.Parent = MainFrame
+    
+    -- Title
+    local Title = Instance.new("TextLabel")
+    Title.Text = "Racket Hack"
+    Title.Size = UDim2.new(1, 0, 0.2, 0)
+    Title.BackgroundTransparency = 1
+    Title.TextColor3 = Color3.white
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 16
+    Title.Parent = MainFrame
+    
+    -- Toggle Button
+    local ToggleBtn = Instance.new("TextButton")
+    ToggleBtn.Text = "Auto Hit: OFF"
+    ToggleBtn.Size = UDim2.new(0.8, 0, 0.25, 0)
+    ToggleBtn.Position = UDim2.new(0.1, 0, 0.25, 0)
+    ToggleBtn.BackgroundColor3 = Color3.fromRGB(80, 40, 40)
+    ToggleBtn.TextColor3 = Color3.white
+    ToggleBtn.Font = Enum.Font.GothamMedium
+    ToggleBtn.TextSize = 14
+    ToggleBtn.Parent = MainFrame
+    
+    local btnCorner = Instance.new("UICorner")
+    btnCorner.CornerRadius = UDim.new(0, 6)
+    btnCorner.Parent = ToggleBtn
+    
+    -- Manual Button
+    local ManualBtn = Instance.new("TextButton")
+    ManualBtn.Text = "Hit Now"
+    ManualBtn.Size = UDim2.new(0.8, 0, 0.25, 0)
+    ManualBtn.Position = UDim2.new(0.1, 0, 0.55, 0)
+    ManualBtn.BackgroundColor3 = Color3.fromRGB(40, 80, 40)
+    ManualBtn.TextColor3 = Color3.white
+    ManualBtn.Font = Enum.Font.GothamMedium
+    ManualBtn.TextSize = 14
+    ManualBtn.Parent = MainFrame
+    
+    local manCorner = Instance.new("UICorner")
+    manCorner.CornerRadius = UDim.new(0, 6)
+    manCorner.Parent = ManualBtn
+    
+    -- Close Button
+    local CloseBtn = Instance.new("TextButton")
+    CloseBtn.Text = "X"
+    CloseBtn.Size = UDim2.new(0.15, 0, 0.2, 0)
+    CloseBtn.Position = UDim2.new(0.85, 0, 0, 0)
+    CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+    CloseBtn.TextColor3 = Color3.white
+    CloseBtn.Font = Enum.Font.GothamBold
+    CloseBtn.TextSize = 12
+    CloseBtn.Parent = MainFrame
+    
+    local closeCorner = Instance.new("UICorner")
+    closeCorner.CornerRadius = UDim.new(0, 6)
+    closeCorner.Parent = CloseBtn
+    
+    -- Button functionality
+    ToggleBtn.MouseButton1Click:Connect(function()
+        AutoHitEnabled = not AutoHitEnabled
+        
+        if AutoHitEnabled then
+            ToggleBtn.Text = "Auto Hit: ON"
+            ToggleBtn.BackgroundColor3 = Color3.fromRGB(40, 80, 40)
+            StartAutoHit()
+        else
+            ToggleBtn.Text = "Auto Hit: OFF"
+            ToggleBtn.BackgroundColor3 = Color3.fromRGB(80, 40, 40)
+            StopAutoHit()
+        end
+    end)
+    
+    ManualBtn.MouseButton1Click:Connect(function()
+        ExecuteHit()
+    end)
+    
+    CloseBtn.MouseButton1Click:Connect(function()
+        ScreenGui:Destroy()
+        StopAutoHit()
+    end)
+    
+    -- Drag functionality
+    local dragging = false
+    local dragStart = Vector2.new(0, 0)
+    local frameStart = Vector2.new(0, 0)
+    
+    Title.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            frameStart = Vector2.new(MainFrame.Position.X.Offset, MainFrame.Position.Y.Offset)
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStart
+            MainFrame.Position = UDim2.new(
+                0, frameStart.X + delta.X,
+                0, frameStart.Y + delta.Y
+            )
+        end
+    end)
+    
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = false
+        end
+    end)
+    
+    ScreenGui.Parent = game.CoreGui or LocalPlayer:WaitForChild("PlayerGui")
+    MainFrame.Parent = ScreenGui
+    
+    print("✅ Simple GUI Loaded (Rayfield fallback)")
+end
+
+-- ============================================
+-- INITIALIZATION AND CLEANUP
+-- ============================================
+
+-- Initialize
+task.wait(2) -- Wait for game to load
+
+-- Initial object scan
+Shuttlecock = FindShuttlecock()
+Racket = FindRacket()
+
+if Shuttlecock then
+    print("✅ Found shuttlecock: " .. Shuttlecock.Name)
+else
+    print("⚠️ No shuttlecock found yet - will scan during game")
+end
+
+if Racket then
+    print("✅ Found racket: " .. Racket.Name)
+end
+
+-- Auto reconnect on character respawn
+LocalPlayer.CharacterAdded:Connect(function()
+    task.wait(1)
+    Racket = FindRacket()
+    Shuttlecock = FindShuttlecock()
+    
+    if AutoHitEnabled then
+        StartAutoHit()
+    end
+end)
+
+-- Cleanup on script stop
+game:GetService("Players").LocalPlayer.CharacterRemoving:Connect(function()
+    StopAutoHit()
+end)
+
+-- ============================================
+-- KEYBINDS (PC ONLY)
+-- ============================================
+
+if IS_PC then
+    UserInputService.InputBegan:Connect(function(Input, Processed)
+        if Processed then return end
+        
+        -- F to toggle auto-hit
+        if Input.KeyCode == Enum.KeyCode.F then
+            AutoHitEnabled = not AutoHitEnabled
+            
+            if AutoHitEnabled then
+                print("Auto-Hit Enabled")
+                StartAutoHit()
+            else
+                print("Auto-Hit Disabled")
+                StopAutoHit()
+            end
+        end
+        
+        -- G for manual hit
+        if Input.KeyCode == Enum.KeyCode.G then
+            ExecuteHit()
+            print("Manual Hit Executed")
+        end
+        
+        -- R to refresh objects
+        if Input.KeyCode == Enum.KeyCode.R then
+            Shuttlecock = FindShuttlecock()
+            Racket = FindRacket()
+            print("Objects refreshed")
+        end
+    end)
+end
+
+-- ============================================
+-- TOUCH GESTURES (MOBILE ONLY)
+-- ============================================
+
+if IS_MOBILE then
+    -- Double tap screen for manual hit
+    local lastTapTime = 0
+    local tapCount = 0
+    
+    UserInputService.TouchStarted:Connect(function(touch, processed)
+        if processed then return end
+        
+        local currentTime = tick()
+        
+        if currentTime - lastTapTime < 0.5 then
+            tapCount = tapCount + 1
+            
+            if tapCount >= 2 then -- Double tap
+                ExecuteHit()
+                tapCount = 0
+            end
+        else
+            tapCount = 1
+        end
+        
+        lastTapTime = currentTime
+    end)
+    
+    -- Swipe down to toggle auto-hit
+    local swipeStart = nil
+    local swipeTime = 0
+    
+    UserInputService.TouchStarted:Connect(function(touch, processed)
+        if processed then return end
+        swipeStart = touch.Position
+        swipeTime = tick()
+    end)
+    
+    UserInputService.TouchEnded:Connect(function(touch, processed)
+        if processed then return end
+        if not swipeStart then return end
+        
+        local swipeEnd = touch.Position
+        local swipeDelta = swipeEnd - swipeStart
+        local swipeDuration = tick() - swipeTime
+        
+        if swipeDuration < 0.5 and swipeDelta.Y > 100 then
+            -- Swipe down detected
+            AutoHitEnabled = not AutoHitEnabled
+            
+            if AutoHitEnabled then
+                StartAutoHit()
+            else
+                StopAutoHit()
+            end
+        end
+        
+        swipeStart = nil
+    end)
+end
+
+-- ============================================
+-- FINAL MESSAGE
+-- ============================================
+
+print("🎮 Script Ready!")
+print("======================")
+if IS_PC then
+    print("CONTROLS:")
+    print("• F = Toggle Auto-Hit")
+    print("• G = Manual Hit")
+    print("• R = Refresh Objects")
+else
+    print("MOBILE CONTROLS:")
+    print("• Tap AUTO HIT button")
+    print("• Tap MANUAL HIT button")
+    print("• Double tap screen = Quick hit")
+    print("• Swipe down = Toggle auto-hit")
+    print("• Swipe left/right on panel = Adjust force")
+    print("• Drag title to move UI")
+end
+print("======================")
+
+-- Return control functions
+return {
+    ToggleAutoHit = function()
+        AutoHitEnabled = not AutoHitEnabled
+        if AutoHitEnabled then
+            StartAutoHit()
+        else
+            StopAutoHit()
+        end
+    end,
+    
+    ForceHit = ExecuteHit,
+    
+    SetForce = function(force)
+        HitForce = math.clamp(force, 50, 200)
+    end,
+    
+    GetStatus = function()
+        return {
+            AutoHit = AutoHitEnabled,
+            Force = HitForce,
+            Shuttlecock = Shuttlecock,
+            Racket = Racket
+        }
+    end
+  
