@@ -1,0 +1,594 @@
+local Players = game:GetService("Players")
+local Player = Players.LocalPlayer
+local RunService = game:GetService("RunService")
+local UserInput = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
+
+-- Platform Detection
+local IS_MOBILE = UserInput.TouchEnabled
+local IS_PC = UserInput.KeyboardEnabled
+
+print("⚡ DarkForge-X Loading...")
+print("🎮 Game: Racket Rival (Small World Games)")
+print("📱 Platform:", IS_MOBILE and "Mobile" or "PC")
+
+-- ============================================
+-- CORE SYSTEMS
+-- ============================================
+
+local AutoHit = {
+    Active = false,
+    Power = 700,
+    Range = 28,
+    Delay = 0.25,
+    LastHit = 0,
+    Loop = nil
+}
+
+local Hitbox = {
+    Active = false,
+    Size = 1.0,
+    Parts = {},
+    Visuals = {}
+}
+
+-- ============================================
+-- BALL DETECTION (Small World Games Specific)
+-- ============================================
+
+local function FindGameBall()
+    -- Method 1: Direct search for Small World Games objects
+    local ball = Workspace:FindFirstChild("Ball") or
+                 Workspace:FindFirstChild("RacketBall") or
+                 Workspace:FindFirstChild("Shuttle") or
+                 Workspace:FindFirstChild("Shuttlecock")
+    
+    -- Method 2: Search in Models
+    if not ball then
+        for _, obj in pairs(Workspace:GetChildren()) do
+            if obj:IsA("Model") and (obj.Name:find("Ball") or obj.Name:find("Shuttle")) then
+                local mainPart = obj:FindFirstChild("Handle") or 
+                                 obj:FindFirstChild("Main") or
+                                 obj:FindFirstChildWhichIsA("BasePart")
+                if mainPart then
+                    return mainPart
+                end
+            end
+        end
+    end
+    
+    -- Method 3: Physics-based detection
+    if not ball then
+        for _, obj in pairs(Workspace:GetDescendants()) do
+            if obj:IsA("BasePart") and obj.Shape == Enum.PartType.Ball then
+                if obj.Velocity.Magnitude > 5 then
+                    return obj
+                end
+            end
+        end
+    end
+    
+    return ball
+end
+
+-- ============================================
+-- RACKET DETECTION
+-- ============================================
+
+local function GetPlayerRacket()
+    local char = Player.Character
+    if not char then return nil end
+    
+    -- Check equipped tools
+    for _, item in pairs(char:GetChildren()) do
+        if item:IsA("Tool") then
+            local name = item.Name:lower()
+            if name:find("racket") or name:find("racquet") or name:find("bat") then
+                return item
+            end
+        end
+    end
+    
+    -- Check backpack
+    for _, item in pairs(Player.Backpack:GetChildren()) do
+        if item:IsA("Tool") then
+            local name = item.Name:lower()
+            if name:find("racket") or name:find("racquet") or name:find("bat") then
+                -- Auto-equip for mobile
+                if IS_MOBILE then
+                    item.Parent = char
+                end
+                return item
+            end
+        end
+    end
+    
+    return nil
+end
+
+-- ============================================
+-- AUTO HIT LOGIC
+-- ============================================
+
+local function PerformAutoHit()
+    if tick() - AutoHit.LastHit < AutoHit.Delay then return end
+    
+    local ball = FindGameBall()
+    local racket = GetPlayerRacket()
+    local char = Player.Character
+    
+    if not ball or not racket or not char then return end
+    
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    
+    -- Distance check
+    local distance = (root.Position - ball.Position).Magnitude
+    if distance > AutoHit.Range then return end
+    
+    -- Direction check
+    local toPlayer = (root.Position - ball.Position).Unit
+    local ballDir = ball.Velocity.Unit
+    local dot = toPlayer:Dot(ballDir)
+    
+    if dot < -0.2 then  -- Ball coming toward player
+        -- Calculate hit direction
+        local hitPower = AutoHit.Power
+        local hitForce
+        
+        if ball.Position.Z > 0 then
+            -- Hit to opponent side
+            hitForce = Vector3.new(
+                math.random(-15, 15),
+                20 + (hitPower * 0.02),
+                -hitPower * 0.08
+            )
+        else
+            hitForce = Vector3.new(
+                math.random(-15, 15),
+                20 + (hitPower * 0.02),
+                hitPower * 0.08
+            )
+        end
+        
+        -- Apply force
+        ball.Velocity = hitForce
+        
+        -- Add spin
+        ball.RotVelocity = Vector3.new(
+            math.random(-50, 50),
+            math.random(-50, 50),
+            math.random(-50, 50)
+        )
+        
+        -- Trigger racket animation
+        local remote = racket:FindFirstChildWhichIsA("RemoteEvent")
+        if remote then
+            pcall(function()
+                remote:FireServer("Swing", ball.Position)
+            end)
+        end
+        
+        -- Visual swing
+        if racket.Handle then
+            local t1 = TweenService:Create(
+                racket.Handle,
+                TweenInfo.new(0.1),
+                {CFrame = racket.Handle.CFrame * CFrame.Angles(math.rad(-30), 0, 0)}
+            )
+            local t2 = TweenService:Create(
+                racket.Handle,
+                TweenInfo.new(0.15),
+                {CFrame = racket.Handle.CFrame * CFrame.Angles(math.rad(30), 0, 0)}
+            )
+            t1:Play()
+            task.wait(0.05)
+            t2:Play()
+        end
+        
+        AutoHit.LastHit = tick()
+        return true
+    end
+    
+    return false
+end
+
+function AutoHit:Toggle()
+    self.Active = not self.Active
+    
+    if self.Active then
+        self.Loop = RunService.Heartbeat:Connect(PerformAutoHit)
+        print("[AutoHit] Activated")
+    else
+        if self.Loop then
+            self.Loop:Disconnect()
+            self.Loop = nil
+        end
+        print("[AutoHit] Deactivated")
+    end
+end
+
+-- ============================================
+-- HITBOX SYSTEM
+-- ============================================
+
+function Hitbox:ModifySize(scale)
+    local racket = GetPlayerRacket()
+    if not racket then return false end
+    
+    -- Store original sizes
+    if not next(self.Parts) then
+        for _, part in pairs(racket:GetDescendants()) do
+            if part:IsA("BasePart") then
+                self.Parts[part] = part.Size
+            end
+        end
+    end
+    
+    -- Apply scaling
+    for part, original in pairs(self.Parts) do
+        if part and part.Parent then
+            part.Size = original * scale
+            
+            -- Add/update visualization
+            if self.Visuals[part] then
+                self.Visuals[part]:Destroy()
+            end
+            
+            local box = Instance.new("SelectionBox")
+            box.Adornee = part
+            box.Color3 = Color3.fromRGB(0, 255, 0)
+            box.Transparency = 0.6
+            box.Parent = part
+            self.Visuals[part] = box
+        end
+    end
+    
+    self.Size = scale
+    print("[Hitbox] Scale:", scale .. "x")
+    return true
+end
+
+function Hitbox:Expand()
+    local newScale = math.min(self.Size * 1.5, 3.0)
+    self:ModifySize(newScale)
+end
+
+function Hitbox:Shrink()
+    local newScale = math.max(self.Size * 0.7, 0.5)
+    self:ModifySize(newScale)
+end
+
+function Hitbox:Toggle()
+    self.Active = not self.Active
+    
+    if self.Active then
+        if self:ModifySize(2.0) then
+            print("[Hitbox] Activated")
+        else
+            self.Active = false
+        end
+    else
+        -- Reset to original
+        for part, original in pairs(self.Parts) do
+            if part then
+                part.Size = original
+                if self.Visuals[part] then
+                    self.Visuals[part]:Destroy()
+                end
+            end
+        end
+        self.Parts = {}
+        self.Visuals = {}
+        self.Size = 1.0
+        print("[Hitbox] Deactivated")
+    end
+end
+
+-- ============================================
+-- SIMPLE GUI
+-- ============================================
+
+local GUI = Instance.new("ScreenGui")
+GUI.Name = "RacketRivalHackGUI"
+GUI.Parent = Player:WaitForChild("PlayerGui")
+
+-- Toggle Button
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Text = "🎮"
+ToggleBtn.Size = IS_MOBILE and UDim2.new(0, 70, 0, 70) or UDim2.new(0, 60, 0, 60)
+ToggleBtn.Position = UDim2.new(1, -80, 0, 30)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.Font = Enum.Font.GothamBold
+ToggleBtn.TextSize = IS_MOBILE and 28 or 24
+ToggleBtn.ZIndex = 100
+ToggleBtn.Parent = GUI
+
+local ToggleCorner = Instance.new("UICorner")
+ToggleCorner.CornerRadius = UDim.new(1, 0)
+ToggleCorner.Parent = ToggleBtn
+
+-- Main Panel
+local Panel = Instance.new("Frame")
+Panel.Size = IS_MOBILE and UDim2.new(0.9, 0, 0, 250) or UDim2.new(0, 350, 0, 250)
+Panel.Position = IS_MOBILE and UDim2.new(0.05, 0, 0.1, 0) or UDim2.new(1, -370, 0.5, -125)
+Panel.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+Panel.Visible = false
+Panel.Parent = GUI
+
+local PanelCorner = Instance.new("UICorner")
+PanelCorner.CornerRadius = UDim.new(0, 12)
+PanelCorner.Parent = Panel
+
+-- Title
+local Title = Instance.new("TextLabel")
+Title.Text = "🎾 RACKET RIVAL HACK"
+Title.Size = UDim2.new(1, 0, 0, 50)
+Title.BackgroundColor3 = Color3.fromRGB(40, 40, 60)
+Title.TextColor3 = Color3.fromRGB(0, 200, 255)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = IS_MOBILE and 18 or 16
+Title.Parent = Panel
+
+-- Auto Hit Button
+local AutoHitBtn = Instance.new("TextButton")
+AutoHitBtn.Text = "⚡ Auto Hit: OFF"
+AutoHitBtn.Size = UDim2.new(0.9, 0, 0, 50)
+AutoHitBtn.Position = UDim2.new(0.05, 0, 0, 60)
+AutoHitBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+AutoHitBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+AutoHitBtn.Font = Enum.Font.GothamSemibold
+AutoHitBtn.TextSize = IS_MOBILE and 16 or 14
+AutoHitBtn.Parent = Panel
+
+local BtnCorner1 = Instance.new("UICorner")
+BtnCorner1.CornerRadius = UDim.new(0, 8)
+BtnCorner1.Parent = AutoHitBtn
+
+-- Hitbox Button
+local HitboxBtn = Instance.new("TextButton")
+HitboxBtn.Text = "📏 Hitbox: OFF"
+HitboxBtn.Size = UDim2.new(0.9, 0, 0, 50)
+HitboxBtn.Position = UDim2.new(0.05, 0, 0, 120)
+HitboxBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+HitboxBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+HitboxBtn.Font = Enum.Font.GothamSemibold
+HitboxBtn.TextSize = IS_MOBILE and 16 or 14
+HitboxBtn.Parent = Panel
+
+local BtnCorner2 = Instance.new("UICorner")
+BtnCorner2.CornerRadius = UDim.new(0, 8)
+BtnCorner2.Parent = HitboxBtn
+
+-- Action Buttons
+local Actions = Instance.new("Frame")
+Actions.Size = UDim2.new(0.9, 0, 0, 50)
+Actions.Position = UDim2.new(0.05, 0, 0, 180)
+Actions.BackgroundTransparency = 1
+Actions.Parent = Panel
+
+local ExpandBtn = Instance.new("TextButton")
+ExpandBtn.Text = "➕"
+ExpandBtn.Size = UDim2.new(0.3, 0, 1, 0)
+ExpandBtn.Position = UDim2.new(0, 0, 0, 0)
+ExpandBtn.BackgroundColor3 = Color3.fromRGB(60, 100, 60)
+ExpandBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ExpandBtn.Font = Enum.Font.GothamBold
+ExpandBtn.TextSize = 20
+ExpandBtn.Parent = Actions
+
+local ShrinkBtn = Instance.new("TextButton")
+ShrinkBtn.Text = "➖"
+ShrinkBtn.Size = UDim2.new(0.3, 0, 1, 0)
+ShrinkBtn.Position = UDim2.new(0.35, 0, 0, 0)
+ShrinkBtn.BackgroundColor3 = Color3.fromRGB(100, 60, 60)
+ShrinkBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ShrinkBtn.Font = Enum.Font.GothamBold
+ShrinkBtn.TextSize = 20
+ShrinkBtn.Parent = Actions
+
+local HitNowBtn = Instance.new("TextButton")
+HitNowBtn.Text = "🎯"
+HitNowBtn.Size = UDim2.new(0.3, 0, 1, 0)
+HitNowBtn.Position = UDim2.new(0.7, 0, 0, 0)
+HitNowBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 100)
+HitNowBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+HitNowBtn.Font = Enum.Font.GothamBold
+HitNowBtn.TextSize = 20
+HitNowBtn.Parent = Actions
+
+-- Close Button
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Text = "✕"
+CloseBtn.Size = UDim2.new(0, 35, 0, 35)
+CloseBtn.Position = UDim2.new(1, -40, 0, 8)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.Parent = Panel
+
+-- ============================================
+-- BUTTON EVENTS
+-- ============================================
+
+ToggleBtn.MouseButton1Click:Connect(function()
+    Panel.Visible = not Panel.Visible
+end)
+
+if IS_MOBILE then
+    ToggleBtn.TouchTap:Connect(function()
+        Panel.Visible = not Panel.Visible
+    end)
+end
+
+CloseBtn.MouseButton1Click:Connect(function()
+    Panel.Visible = false
+end)
+
+AutoHitBtn.MouseButton1Click:Connect(function()
+    AutoHit:Toggle()
+    AutoHitBtn.Text = "⚡ Auto Hit: " .. (AutoHit.Active and "ON" or "OFF")
+    AutoHitBtn.BackgroundColor3 = AutoHit.Active and Color3.fromRGB(40, 150, 40) or Color3.fromRGB(60, 60, 80)
+end)
+
+HitboxBtn.MouseButton1Click:Connect(function()
+    Hitbox:Toggle()
+    HitboxBtn.Text = "📏 Hitbox: " .. (Hitbox.Active and "ON" or "OFF")
+    HitboxBtn.BackgroundColor3 = Hitbox.Active and Color3.fromRGB(40, 150, 40) or Color3.fromRGB(60, 60, 80)
+end)
+
+ExpandBtn.MouseButton1Click:Connect(function()
+    Hitbox:Expand()
+end)
+
+ShrinkBtn.MouseButton1Click:Connect(function()
+    Hitbox:Shrink()
+end)
+
+HitNowBtn.MouseButton1Click:Connect(function()
+    PerformAutoHit()
+end)
+
+-- Mobile touch events
+if IS_MOBILE then
+    AutoHitBtn.TouchTap:Connect(function()
+        AutoHit:Toggle()
+        AutoHitBtn.Text = "⚡ Auto Hit: " .. (AutoHit.Active and "ON" or "OFF")
+        AutoHitBtn.BackgroundColor3 = AutoHit.Active and Color3.fromRGB(40, 150, 40) or Color3.fromRGB(60, 60, 80)
+    end)
+    
+    HitboxBtn.TouchTap:Connect(function()
+        Hitbox:Toggle()
+        HitboxBtn.Text = "📏 Hitbox: " .. (Hitbox.Active and "ON" or "OFF")
+        HitboxBtn.BackgroundColor3 = Hitbox.Active and Color3.fromRGB(40, 150, 40) or Color3.fromRGB(60, 60, 80)
+    end)
+end
+
+-- ============================================
+-- KEYBINDS & CONTROLS
+-- ============================================
+
+if IS_PC then
+    UserInput.InputBegan:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.F6 then
+            AutoHit:Toggle()
+            AutoHitBtn.Text = "⚡ Auto Hit: " .. (AutoHit.Active and "ON" or "OFF")
+            AutoHitBtn.BackgroundColor3 = AutoHit.Active and Color3.fromRGB(40, 150, 40) or Color3.fromRGB(60, 60, 80)
+        elseif input.KeyCode == Enum.KeyCode.F7 then
+            Hitbox:Toggle()
+            HitboxBtn.Text = "📏 Hitbox: " .. (Hitbox.Active and "ON" or "OFF")
+            HitboxBtn.BackgroundColor3 = Hitbox.Active and Color3.fromRGB(40, 150, 40) or Color3.fromRGB(60, 60, 80)
+        elseif input.KeyCode == Enum.KeyCode.F5 then
+            Panel.Visible = not Panel.Visible
+        end
+    end)
+end
+
+-- Mobile swipe controls
+if IS_MOBILE then
+    local swipeStart
+    UserInput.TouchStarted:Connect(function(touch)
+        swipeStart = touch.Position
+    end)
+    
+    UserInput.TouchEnded:Connect(function(touch)
+        if swipeStart then
+            local dist = (touch.Position - swipeStart).Magnitude
+            if dist > 60 then
+                local dir = (touch.Position - swipeStart).Unit
+                if dir.X > 0.7 then
+                    PerformAutoHit()
+                elseif dir.X < -0.7 then
+                    Hitbox:Toggle()
+                    HitboxBtn.Text = "📏 Hitbox: " .. (Hitbox.Active and "ON" or "OFF")
+                    HitboxBtn.BackgroundColor3 = Hitbox.Active and Color3.fromRGB(40, 150, 40) or Color3.fromRGB(60, 60, 80)
+                end
+            end
+            swipeStart = nil
+        end
+    end)
+end
+
+-- ============================================
+-- RESPAWN HANDLING
+-- ============================================
+
+Player.CharacterAdded:Connect(function(char)
+    task.wait(1)
+    
+    -- Restore states
+    if AutoHitBtn.Text:find("ON") and not AutoHit.Active then
+        AutoHit:Toggle()
+    end
+    
+    if HitboxBtn.Text:find("ON") and not Hitbox.Active then
+        Hitbox:Toggle()
+    end
+    
+    -- Death reset
+    char:WaitForChild("Humanoid").Died:Connect(function()
+        if AutoHit.Active then
+            AutoHit:Toggle()
+            AutoHitBtn.Text = "⚡ Auto Hit: OFF"
+            AutoHitBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+        end
+        
+        if Hitbox.Active then
+            Hitbox:Toggle()
+            HitboxBtn.Text = "📏 Hitbox: OFF"
+            HitboxBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+        end
+    end)
+end)
+
+-- ============================================
+-- INITIALIZATION
+-- ============================================
+
+task.wait(2)
+
+-- Welcome message
+print("\n" .. string.rep("=", 40))
+print("🎾 RACKET RIVAL HACK LOADED")
+print("👤 Player: " .. Player.Name)
+print("📱 Platform: " .. (IS_MOBILE and "Mobile" or "PC"))
+print("⚡ Auto Hit: Ready")
+print("📏 Hitbox: Ready")
+print(string.rep("=", 40))
+
+-- Controls info
+local controls = IS_MOBILE and 
+    "Controls:\n" ..
+    "🎮 Button: Open menu\n" ..
+    "👉 Swipe right: Auto hit\n" ..
+    "👈 Swipe left: Toggle hitbox\n" ..
+    "➕ Button: Expand hitbox\n" ..
+    "➖ Button: Shrink hitbox" 
+    or 
+    "Controls:\n" ..
+    "F5: Open/Close menu\n" ..
+    "F6: Toggle Auto Hit\n" ..
+    "F7: Toggle Hitbox\n" ..
+    "🎯 Button: Hit now"
+
+print(controls)
+print(string.rep("=", 40))
+
+-- Notification
+game:GetService("StarterGui"):SetCore("SendNotification", {
+    Title = "Racket Rival Hack Loaded",
+    Text = IS_MOBILE and "Tap 🎮 for menu\nSwipe to control" 
+           or "F5: Menu | F6: Auto Hit | F7: Hitbox",
+    Duration = 5,
+    Icon = "rbxassetid://6023426925"
+})
+
+-- Return functions for external control
+return {
+    ToggleAutoHit = function() AutoHit:Toggle() end,
+    ToggleHitbox = function() Hitbox:Toggle() end,
+    ShowMenu = function() Panel.Visible = true end,
+    HideMenu = function() Panel.Visible = false end
+}
